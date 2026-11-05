@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "namespace": {
+      "type": "string",
+      "description": "Namespace to fetch events from. Defaults to 'default'.",
+      "default": "default"
+    },
+    "involved_object_name": {
+      "type": "string",
+      "description": "Filter events for a specific resource name (e.g. pod name)."
+    },
+    "full_output": {
+      "type": "boolean",
+      "description": "If true, bypasses metadata pruning and returns unpruned object.",
+      "default": false
+    }
+  }
+}

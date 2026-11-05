@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "properties": {
+    "namespace": {
+      "type": "string",
+      "description": "Namespace of the pod. Defaults to 'default'.",
+      "default": "default"
+    },
+    "pod": {
+      "type": "string",
+      "description": "Name of the pod."
+    },
+    "container": {
+      "type": "string",
+      "description": "Container name (optional, required if pod has multiple containers)."
+    },
+    "tail_lines": {
+      "type": "integer",
+      "description": "Number of recent log lines to retrieve (default: 100, max: 1000).",
+      "default": 100
+    },
+    "previous": {
+      "type": "boolean",
+      "description": "If true, retrieves logs for the previous terminated/crashed instance of the container.",
+      "default": false
+    }
+  },
+  "required": ["pod"]
+}
