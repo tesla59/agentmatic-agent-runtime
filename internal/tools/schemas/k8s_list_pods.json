@@ -9,6 +9,11 @@
     "label_selector": {
       "type": "string",
       "description": "Optional label query filter, e.g. 'app=web'."
+    },
+    "full_output": {
+      "type": "boolean",
+      "description": "If true, bypasses metadata pruning and returns unpruned object.",
+      "default": false
     }
   }
 }
