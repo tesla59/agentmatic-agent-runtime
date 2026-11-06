@@ -217,9 +217,7 @@ type geminiStream struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	eventChan  chan *StreamEvent
-	errChan    chan error
-	done       bool
-	lastResp   *Response
+	err        error
 	totalUsage Usage
 }
 
@@ -229,7 +227,6 @@ func newGeminiStream(ctx context.Context, seq iter.Seq2[*genai.GenerateContentRe
 		ctx:       ctx,
 		cancel:    cancel,
 		eventChan: make(chan *StreamEvent, 16),
-		errChan:   make(chan error, 1),
 	}
 
 	go s.consume(seq)
@@ -242,8 +239,14 @@ func (s *geminiStream) consume(seq iter.Seq2[*genai.GenerateContentResponse, err
 	var accumulatedParts []Part
 
 	for chunk, err := range seq {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
 		if err != nil {
-			s.errChan <- err
+			s.err = err
 			return
 		}
 
@@ -260,10 +263,14 @@ func (s *geminiStream) consume(seq iter.Seq2[*genai.GenerateContentResponse, err
 		for _, p := range chunk.Candidates[0].Content.Parts {
 			if p.Thought {
 				accumulatedParts = append(accumulatedParts, ThinkingPart{Thought: p.Text})
-				s.send(&StreamEvent{Type: EventThinkingDelta, Delta: p.Text})
+				if !s.send(&StreamEvent{Type: EventThinkingDelta, Delta: p.Text}) {
+					return
+				}
 			} else if p.Text != "" {
 				accumulatedParts = append(accumulatedParts, TextPart{Text: p.Text})
-				s.send(&StreamEvent{Type: EventContentDelta, Delta: p.Text})
+				if !s.send(&StreamEvent{Type: EventContentDelta, Delta: p.Text}) {
+					return
+				}
 			}
 			if p.FunctionCall != nil {
 				argsBytes, _ := json.Marshal(p.FunctionCall.Args)
@@ -273,7 +280,9 @@ func (s *geminiStream) consume(seq iter.Seq2[*genai.GenerateContentResponse, err
 					Arguments: string(argsBytes),
 				}
 				accumulatedParts = append(accumulatedParts, *tc)
-				s.send(&StreamEvent{Type: EventToolCallDelta, ToolCall: tc, Delta: string(argsBytes)})
+				if !s.send(&StreamEvent{Type: EventToolCallDelta, ToolCall: tc, Delta: string(argsBytes)}) {
+					return
+				}
 			}
 		}
 	}
@@ -287,19 +296,22 @@ func (s *geminiStream) consume(seq iter.Seq2[*genai.GenerateContentResponse, err
 	s.send(&StreamEvent{Type: EventDone, Response: finalResp})
 }
 
-func (s *geminiStream) send(ev *StreamEvent) {
+func (s *geminiStream) send(ev *StreamEvent) bool {
 	select {
 	case <-s.ctx.Done():
+		return false
 	case s.eventChan <- ev:
+		return true
 	}
 }
 
 func (s *geminiStream) Next() (*StreamEvent, error) {
 	select {
-	case err := <-s.errChan:
-		return nil, err
 	case ev, ok := <-s.eventChan:
 		if !ok {
+			if s.err != nil {
+				return nil, s.err
+			}
 			return nil, io.EOF
 		}
 		return ev, nil
