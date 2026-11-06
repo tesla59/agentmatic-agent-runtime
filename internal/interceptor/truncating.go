@@ -17,7 +17,7 @@ func (t *TruncatingInterceptor) Name() string {
 	return "TruncatingInterceptor"
 }
 
-func (t *TruncatingInterceptor) Process(_ context.Context, _, output string, opts InterceptOptions) (string, error) {
+func (t *TruncatingInterceptor) Process(_ context.Context, _, output string, opts Options) (string, error) {
 	limit := t.defaultMaxBytes
 	if opts.MaxBytes > 0 {
 		limit = opts.MaxBytes

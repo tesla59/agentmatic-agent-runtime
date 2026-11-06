@@ -33,13 +33,13 @@ func TestChainAndWrap(t *testing.T) {
 	chain := NewDefaultChain(300)
 
 	// 1. Test Wrap delegation
-	tool := chain.Wrap(&mockSecretTool{})
-	if tool.Name() != "mock_tool" {
-		t.Fatalf("expected tool name 'mock_tool', got %s", tool.Name())
+	wrapped := chain.Wrap(&mockSecretTool{})
+	if wrapped.Name() != "mock_tool" {
+		t.Fatalf("expected tool name 'mock_tool', got %s", wrapped.Name())
 	}
 
 	// 2. Test Default Execution (Pruning + Masking)
-	sanitized, err := tool.Execute(ctx, json.RawMessage(`{}`))
+	sanitized, err := wrapped.Execute(ctx, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("tool execution failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestChainAndWrap(t *testing.T) {
 	}
 
 	// 3. Test FullOutput: true (Bypasses pruning, but STILL masks secrets!)
-	fullSanitized, err := tool.Execute(ctx, json.RawMessage(`{"full_output": true}`))
+	fullSanitized, err := wrapped.Execute(ctx, json.RawMessage(`{"full_output": true}`))
 	if err != nil {
 		t.Fatalf("tool execution with full_output failed: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestChainAndWrap(t *testing.T) {
 
 	// 4. Test Truncation
 	longChain := NewDefaultChain(50)
-	truncated, err := longChain.Execute(ctx, "logs", strings.Repeat("A", 300), InterceptOptions{})
+	truncated, err := longChain.Execute(ctx, "logs", strings.Repeat("A", 300), Options{})
 	if err != nil {
 		t.Fatalf("truncation failed: %v", err)
 	}

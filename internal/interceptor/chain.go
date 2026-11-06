@@ -8,8 +8,8 @@ import (
 	"github.com/tesla59/agentmatic-agent-runtime/internal/tools"
 )
 
-// InterceptOptions carries flags governing output transformation.
-type InterceptOptions struct {
+// Options carries flags governing output transformation.
+type Options struct {
 	FullOutput bool // If true, bypasses metadata pruning
 	MaxBytes   int  // Maximum bytes allowed before truncation
 }
@@ -17,7 +17,7 @@ type InterceptOptions struct {
 // Interceptor processes and sanitizes tool outputs before returning them to the agent.
 type Interceptor interface {
 	Name() string
-	Process(ctx context.Context, toolName, output string, opts InterceptOptions) (string, error)
+	Process(ctx context.Context, toolName, output string, opts Options) (string, error)
 }
 
 // Chain executes a sequential chain of interceptors.
@@ -43,7 +43,7 @@ func NewDefaultChain(maxBytes int) *Chain {
 }
 
 // Execute passes raw tool output through every interceptor in the chain.
-func (c *Chain) Execute(ctx context.Context, toolName, rawOutput string, opts InterceptOptions) (string, error) {
+func (c *Chain) Execute(ctx context.Context, toolName, rawOutput string, opts Options) (string, error) {
 	out := rawOutput
 	var err error
 	for _, i := range c.interceptors {
@@ -56,27 +56,27 @@ func (c *Chain) Execute(ctx context.Context, toolName, rawOutput string, opts In
 }
 
 // Wrap decorates any tools.Tool so its execution automatically runs through this chain.
-func (c *Chain) Wrap(tool tools.Tool) tools.Tool {
-	return &InterceptedTool{
-		Tool:  tool,
+func (c *Chain) Wrap(t tools.Tool) tools.Tool {
+	return &tool{
+		Tool:  t,
 		chain: c,
 	}
 }
 
-// InterceptedTool wraps a tools.Tool and pipes its execution through an interceptor chain.
-type InterceptedTool struct {
+// tool wraps a tools.Tool and pipes its execution through an interceptor chain.
+type tool struct {
 	tools.Tool
 	chain *Chain
 }
 
-func (it *InterceptedTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
-	output, err := it.Tool.Execute(ctx, rawArgs)
+func (t *tool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	output, err := t.Tool.Execute(ctx, rawArgs)
 	if err != nil {
-		sanitized, _ := it.chain.Execute(ctx, it.Tool.Name(), output, InterceptOptions{})
+		sanitized, _ := t.chain.Execute(ctx, t.Tool.Name(), output, Options{})
 		return sanitized, err
 	}
 
-	var opts InterceptOptions
+	var opts Options
 	var argsMap map[string]any
 	if len(rawArgs) > 0 && json.Unmarshal(rawArgs, &argsMap) == nil {
 		if full, ok := argsMap["full_output"].(bool); ok {
@@ -84,5 +84,5 @@ func (it *InterceptedTool) Execute(ctx context.Context, rawArgs json.RawMessage)
 		}
 	}
 
-	return it.chain.Execute(ctx, it.Tool.Name(), output, opts)
+	return t.chain.Execute(ctx, t.Tool.Name(), output, opts)
 }

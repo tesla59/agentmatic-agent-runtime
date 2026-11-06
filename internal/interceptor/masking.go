@@ -24,7 +24,7 @@ func (m *MaskingInterceptor) Name() string {
 	return "MaskingInterceptor"
 }
 
-func (m *MaskingInterceptor) Process(_ context.Context, _, output string, _ InterceptOptions) (string, error) {
+func (m *MaskingInterceptor) Process(_ context.Context, _, output string, _ Options) (string, error) {
 	sanitized := output
 	for _, pat := range m.patterns {
 		sanitized = pat.ReplaceAllString(sanitized, "[REDACTED_SECRET]")

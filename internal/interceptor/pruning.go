@@ -16,7 +16,7 @@ func (p *PruningInterceptor) Name() string {
 	return "PruningInterceptor"
 }
 
-func (p *PruningInterceptor) Process(_ context.Context, _, output string, opts InterceptOptions) (string, error) {
+func (p *PruningInterceptor) Process(_ context.Context, _, output string, opts Options) (string, error) {
 	if opts.FullOutput {
 		return output, nil
 	}
