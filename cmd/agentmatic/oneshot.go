@@ -4,14 +4,34 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/tesla59/agentmatic-agent-runtime/internal/engine"
 )
 
-// oneShotStepListener logs agent progress steps during execution.
+// oneShotStepListener prints intermediate agent reasoning, tool selection, and observations to the terminal.
 func oneShotStepListener(step engine.Step) {
+	fmt.Printf("\n[Step %d]\n", step.Number)
+	if step.Thinking != "" {
+		fmt.Printf("Thinking:\n%s\n", strings.TrimSpace(step.Thinking))
+	}
+	if step.Message != "" {
+		fmt.Printf("Model:\n%s\n", strings.TrimSpace(step.Message))
+	}
 	if step.Action != nil {
-		slog.Info("agent action", "step", step.Number, "tool", step.Action.Name, "args", step.Action.Arguments)
+		fmt.Printf("Action: %s(%s)\n", step.Action.Name, step.Action.Arguments)
+	}
+	if step.Observation != "" {
+		obs := strings.TrimSpace(step.Observation)
+		if len(obs) > 500 {
+			obs = obs[:500] + "... [truncated]"
+		}
+		fmt.Printf("Observation:\n%s\n", obs)
+	}
+
+	// Also record to debug logs if enabled
+	if step.Action != nil {
+		slog.Debug("agent action", "step", step.Number, "tool", step.Action.Name, "args", step.Action.Arguments)
 	}
 	if step.Thinking != "" {
 		slog.Debug("agent thinking", "step", step.Number, "thought", step.Thinking)
@@ -35,6 +55,7 @@ func runOneShot(ctx context.Context, eng *engine.Engine, task string) error {
 		"completion_tokens", result.Usage.CompletionTokens,
 	)
 
-	fmt.Println("\n" + result.Answer)
+	fmt.Println("\n=== Final Answer ===")
+	fmt.Println(result.Answer)
 	return nil
 }

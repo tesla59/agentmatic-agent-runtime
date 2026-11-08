@@ -140,6 +140,9 @@ func (g *GeminiClient) buildPayload(req Request) ([]*genai.Content, *genai.Gener
 
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
+		ThinkingConfig: &genai.ThinkingConfig{
+			IncludeThoughts: true,
+		},
 	}
 
 	if req.Temperature != nil {

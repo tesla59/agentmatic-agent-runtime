@@ -9,14 +9,18 @@ import (
 	"github.com/tesla59/agentmatic-agent-runtime/internal/tools"
 )
 
-const defaultSystemPrompt = "You are AgentMatic, an autonomous Kubernetes DevOps and infrastructure engineer. " +
-	"Investigate issues methodically using your available tools. Inspect pods, logs, and cluster events to diagnose problems. " +
-	"Provide clear root-cause analysis and actionable recommendations."
+const defaultSystemPrompt = "You are AgentMatic, an autonomous Kubernetes DevOps and infrastructure engineer.\n" +
+	"Investigate issues methodically using your available tools.\n\n" +
+	"Operational Rules:\n" +
+	"1. Before invoking any tool, explain your reasoning: state your hypothesis, what data you need, and why you are calling this tool.\n" +
+	"2. After receiving an observation, analyze the findings before taking further actions.\n" +
+	"3. Provide clear root-cause analysis and actionable recommendations."
 
 // Step captures an individual reasoning and action cycle of the agent.
 type Step struct {
 	Number      int               `json:"number"`
 	Thinking    string            `json:"thinking,omitempty"`
+	Message     string            `json:"message,omitempty"`
 	Action      *llm.ToolCallPart `json:"action,omitempty"`
 	Observation string            `json:"observation,omitempty"`
 }
@@ -154,6 +158,7 @@ func (e *Engine) Run(ctx context.Context, task string) (*RunResult, error) {
 			stepRecord := Step{
 				Number:      stepNum,
 				Thinking:    resp.Message.Thinking(),
+				Message:     resp.Message.Text(),
 				Action:      &tc,
 				Observation: observation,
 			}
