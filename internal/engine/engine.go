@@ -82,13 +82,22 @@ func New(cfg Config) (*Engine, error) {
 	}, nil
 }
 
-// Run executes the agent loop until the LLM produces a final answer or maxSteps is reached.
+// SystemPrompt returns the engine's configured system prompt.
+func (e *Engine) SystemPrompt() string {
+	return e.systemPrompt
+}
+
+// Run executes the agent loop starting with a fresh conversation for the given task.
 func (e *Engine) Run(ctx context.Context, task string) (*RunResult, error) {
 	history := []llm.Message{
 		llm.SystemMessage(e.systemPrompt),
 		llm.UserMessage(task),
 	}
+	return e.RunWithHistory(ctx, history)
+}
 
+// RunWithHistory executes the agent loop continuing from an existing conversation history.
+func (e *Engine) RunWithHistory(ctx context.Context, history []llm.Message) (*RunResult, error) {
 	// Prepare tool definitions from the registry
 	var toolDefs []llm.ToolDefinition
 	for _, t := range e.registry.List() {
@@ -102,13 +111,17 @@ func (e *Engine) Run(ctx context.Context, task string) (*RunResult, error) {
 	var steps []Step
 	var totalUsage llm.Usage
 
+	// Make a shallow copy of history so internal appends do not mutate the caller's slice header
+	hist := make([]llm.Message, len(history))
+	copy(hist, history)
+
 	for stepNum := 1; stepNum <= e.maxSteps; stepNum++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 
 		resp, err := e.client.Chat(ctx, llm.Request{
-			Messages: history,
+			Messages: hist,
 			Tools:    toolDefs,
 		})
 		if err != nil {
@@ -120,7 +133,7 @@ func (e *Engine) Run(ctx context.Context, task string) (*RunResult, error) {
 		totalUsage.CompletionTokens += resp.Usage.CompletionTokens
 		totalUsage.TotalTokens += resp.Usage.TotalTokens
 
-		history = append(history, resp.Message)
+		hist = append(hist, resp.Message)
 		toolCalls := resp.Message.ToolCalls()
 
 		// If no tool calls, the model reached its final resolution
@@ -128,7 +141,7 @@ func (e *Engine) Run(ctx context.Context, task string) (*RunResult, error) {
 			return &RunResult{
 				Answer:  resp.Message.Text(),
 				Steps:   steps,
-				History: history,
+				History: hist,
 				Usage:   totalUsage,
 			}, nil
 		}
@@ -153,7 +166,7 @@ func (e *Engine) Run(ctx context.Context, task string) (*RunResult, error) {
 			}
 
 			// Append observation to context for the model's next turn
-			history = append(history, llm.ToolResultMessage(tc.ID, observation, isError))
+			hist = append(hist, llm.ToolResultMessage(tc.ID, observation, isError))
 
 			stepRecord := Step{
 				Number:      stepNum,
