@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -102,6 +103,94 @@ func (m Message) ToolCalls() []ToolCallPart {
 		}
 	}
 	return calls
+}
+
+type rawPart struct {
+	Type             PartType `json:"type"`
+	Text             string   `json:"text,omitempty"`
+	Thought          string   `json:"thought,omitempty"`
+	ThoughtSignature []byte   `json:"thought_signature,omitempty"`
+	ID               string   `json:"id,omitempty"`
+	Name             string   `json:"name,omitempty"`
+	Arguments        string   `json:"arguments,omitempty"`
+	ToolCallID       string   `json:"tool_call_id,omitempty"`
+	Content          string   `json:"content,omitempty"`
+	IsError          bool     `json:"is_error,omitempty"`
+}
+
+// MarshalJSON provides custom polymorphic serialization for Message.Parts.
+func (m Message) MarshalJSON() ([]byte, error) {
+	rawParts := make([]rawPart, len(m.Parts))
+	for i, p := range m.Parts {
+		switch v := p.(type) {
+		case TextPart:
+			rawParts[i] = rawPart{Type: PartTypeText, Text: v.Text}
+		case ThinkingPart:
+			rawParts[i] = rawPart{Type: PartTypeThinking, Thought: v.Thought, ThoughtSignature: v.ThoughtSignature}
+		case ToolCallPart:
+			rawParts[i] = rawPart{Type: PartTypeToolCall, ID: v.ID, Name: v.Name, Arguments: v.Arguments, ThoughtSignature: v.ThoughtSignature}
+		case ToolResultPart:
+			rawParts[i] = rawPart{Type: PartTypeToolResult, ToolCallID: v.ToolCallID, Content: v.Content, IsError: v.IsError}
+		}
+	}
+
+	return json.Marshal(&struct {
+		Role  Role      `json:"role"`
+		Parts []rawPart `json:"parts"`
+	}{
+		Role:  m.Role,
+		Parts: rawParts,
+	})
+}
+
+// UnmarshalJSON provides custom polymorphic deserialization for Message.Parts.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role  Role      `json:"role"`
+		Parts []rawPart `json:"parts"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	m.Role = raw.Role
+	m.Parts = make([]Part, len(raw.Parts))
+	for i, p := range raw.Parts {
+		switch p.Type {
+		case PartTypeThinking:
+			m.Parts[i] = ThinkingPart{
+				Thought:          p.Thought,
+				ThoughtSignature: p.ThoughtSignature,
+			}
+		case PartTypeToolCall:
+			m.Parts[i] = ToolCallPart{
+				ID:               p.ID,
+				Name:             p.Name,
+				Arguments:        p.Arguments,
+				ThoughtSignature: p.ThoughtSignature,
+			}
+		case PartTypeToolResult:
+			m.Parts[i] = ToolResultPart{
+				ToolCallID: p.ToolCallID,
+				Content:    p.Content,
+				IsError:    p.IsError,
+			}
+		case PartTypeText:
+			m.Parts[i] = TextPart{Text: p.Text}
+		default:
+			// Fallback: detect by populated fields if type was omitted
+			if p.Thought != "" {
+				m.Parts[i] = ThinkingPart{Thought: p.Thought, ThoughtSignature: p.ThoughtSignature}
+			} else if p.Name != "" || p.Arguments != "" {
+				m.Parts[i] = ToolCallPart{ID: p.ID, Name: p.Name, Arguments: p.Arguments, ThoughtSignature: p.ThoughtSignature}
+			} else if p.ToolCallID != "" {
+				m.Parts[i] = ToolResultPart{ToolCallID: p.ToolCallID, Content: p.Content, IsError: p.IsError}
+			} else {
+				m.Parts[i] = TextPart{Text: p.Text}
+			}
+		}
+	}
+	return nil
 }
 
 // Helper constructors for common message patterns

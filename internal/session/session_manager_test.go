@@ -139,3 +139,56 @@ func TestSessionManager_ConcurrentAccess(t *testing.T) {
 		t.Errorf("expected 20 sessions registered concurrently, got %d", sm.Count())
 	}
 }
+
+func TestSessionManager_WithFileStore(t *testing.T) {
+	tempDir := t.TempDir()
+	fs, err := NewFileStore(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create file store: %v", err)
+	}
+
+	eng := createTestEngine(&mockLLM{})
+	sm := NewSessionManager(fs)
+
+	sess, err := New(Config{Title: "Persistent Session", Engine: eng})
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Registering should save to disk via file store
+	if err := sm.Register(sess); err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+
+	// Create a new session manager pointing to the same disk store and LoadAll
+	smRestored := NewSessionManager(fs)
+	if smRestored.Count() != 0 {
+		t.Errorf("expected empty in-memory state before LoadAll, got %d", smRestored.Count())
+	}
+
+	if err := smRestored.LoadAll(eng); err != nil {
+		t.Fatalf("load all failed: %v", err)
+	}
+
+	if smRestored.Count() != 1 {
+		t.Fatalf("expected 1 session loaded from disk, got %d", smRestored.Count())
+	}
+
+	loadedSess, ok := smRestored.Get(sess.ID())
+	if !ok {
+		t.Fatalf("failed to get loaded session by id: %s", sess.ID())
+	}
+	if loadedSess.Title() != "Persistent Session" {
+		t.Errorf("unexpected loaded title: %q", loadedSess.Title())
+	}
+
+	// Deleting via manager should remove from memory and disk
+	if err := smRestored.Delete(sess.ID()); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	_, err = fs.Load(sess.ID())
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("expected ErrSessionNotFound on disk after delete, got %v", err)
+	}
+}

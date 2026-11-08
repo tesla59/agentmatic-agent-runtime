@@ -34,6 +34,18 @@ type Config struct {
 	Engine       *engine.Engine
 }
 
+// Snapshot is a detached serializable point-in-time representation of a Session.
+type Snapshot struct {
+	ID           string        `json:"id"`
+	Title        string        `json:"title"`
+	Status       Status        `json:"status"`
+	History      []llm.Message `json:"history"`
+	SystemPrompt string        `json:"system_prompt,omitempty"`
+	TotalUsage   llm.Usage     `json:"total_usage"`
+	CreatedAt    time.Time     `json:"created_at"`
+	UpdatedAt    time.Time     `json:"updated_at"`
+}
+
 // Session encapsulates an ongoing interactive multi-turn agent conversation.
 type Session struct {
 	mu           sync.RWMutex
@@ -137,6 +149,51 @@ func (s *Session) UpdatedAt() time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.updatedAt
+}
+
+// Snapshot returns an immutable point-in-time copy of the session state.
+func (s *Session) Snapshot() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	hist := make([]llm.Message, len(s.history))
+	copy(hist, s.history)
+
+	return Snapshot{
+		ID:           s.id,
+		Title:        s.title,
+		Status:       s.status,
+		History:      hist,
+		SystemPrompt: s.systemPrompt,
+		TotalUsage:   s.totalUsage,
+		CreatedAt:    s.createdAt,
+		UpdatedAt:    s.updatedAt,
+	}
+}
+
+// Restore re-instantiates an existing Session from a stored Snapshot.
+func Restore(snap Snapshot, eng *engine.Engine) (*Session, error) {
+	if eng == nil {
+		return nil, fmt.Errorf("engine is required")
+	}
+	if snap.ID == "" {
+		return nil, fmt.Errorf("session ID is required")
+	}
+
+	hist := make([]llm.Message, len(snap.History))
+	copy(hist, snap.History)
+
+	return &Session{
+		id:           snap.ID,
+		title:        snap.Title,
+		status:       snap.Status,
+		history:      hist,
+		systemPrompt: snap.SystemPrompt,
+		engine:       eng,
+		totalUsage:   snap.TotalUsage,
+		createdAt:    snap.CreatedAt,
+		updatedAt:    snap.UpdatedAt,
+	}, nil
 }
 
 // Rename updates the title of the session.
