@@ -7,7 +7,20 @@ import (
 	"strings"
 
 	"github.com/tesla59/agentmatic-agent-runtime/internal/engine"
+	"github.com/tesla59/agentmatic-agent-runtime/internal/runtime"
 )
+
+// runOneShotCLI initializes runtime and executes a single CLI task.
+func runOneShotCLI(ctx context.Context, task string) error {
+	rt, err := runtime.New(ctx, runtime.Config{
+		StepListener: oneShotStepListener,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize runtime: %w", err)
+	}
+
+	return runOneShot(ctx, rt.Engine, task)
+}
 
 // oneShotStepListener prints intermediate agent reasoning, tool selection, and observations to the terminal.
 func oneShotStepListener(step engine.Step) {
