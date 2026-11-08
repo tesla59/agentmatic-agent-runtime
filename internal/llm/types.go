@@ -40,16 +40,18 @@ func (t TextPart) Type() PartType { return PartTypeText }
 
 // ThinkingPart contains extended reasoning or Chain-of-Thought (e.g. Gemini 2.0 / Claude 3.7 / R1).
 type ThinkingPart struct {
-	Thought string `json:"thought"`
+	Thought          string `json:"thought"`
+	ThoughtSignature []byte `json:"thought_signature,omitempty"`
 }
 
 func (t ThinkingPart) Type() PartType { return PartTypeThinking }
 
 // ToolCallPart represents an LLM's request to execute an external tool.
 type ToolCallPart struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"` // Raw JSON string
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Arguments        string `json:"arguments"` // Raw JSON string
+	ThoughtSignature []byte `json:"thought_signature,omitempty"`
 }
 
 func (t ToolCallPart) Type() PartType { return PartTypeToolCall }

@@ -13,7 +13,7 @@ import (
 // GeminiConfig holds settings for initializing the Gemini client.
 type GeminiConfig struct {
 	APIKey string
-	Model  string // Defaults to "gemini-2.0-flash" if empty
+	Model  string // Defaults to "gemini-flash-latest" if empty
 }
 
 // GeminiClient implements Client using the official Google GenAI Go SDK.
@@ -25,7 +25,7 @@ type GeminiClient struct {
 // NewGeminiClient creates a new native Gemini client using the official GenAI SDK.
 func NewGeminiClient(ctx context.Context, cfg GeminiConfig) (*GeminiClient, error) {
 	if cfg.Model == "" {
-		cfg.Model = "gemini-2.0-flash"
+		cfg.Model = "gemini-flash-latest"
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -96,7 +96,11 @@ func (g *GeminiClient) buildPayload(req Request) ([]*genai.Content, *genai.Gener
 			case TextPart:
 				parts = append(parts, &genai.Part{Text: p.Text})
 			case ThinkingPart:
-				parts = append(parts, &genai.Part{Text: p.Thought, Thought: true})
+				parts = append(parts, &genai.Part{
+					Text:             p.Thought,
+					Thought:          true,
+					ThoughtSignature: p.ThoughtSignature,
+				})
 			case ToolCallPart:
 				// genai uses FunctionCall for client-side tools executed by our harness.
 				// (genai.ToolCall is reserved for server-side tools like Google Search).
@@ -111,6 +115,7 @@ func (g *GeminiClient) buildPayload(req Request) ([]*genai.Content, *genai.Gener
 						Name: p.Name,
 						Args: args,
 					},
+					ThoughtSignature: p.ThoughtSignature,
 				})
 			case ToolResultPart:
 				parts = append(parts, &genai.Part{
@@ -172,7 +177,10 @@ func (g *GeminiClient) convertResponse(raw *genai.GenerateContentResponse) (*Res
 	if candidate.Content != nil {
 		for _, p := range candidate.Content.Parts {
 			if p.Thought {
-				parts = append(parts, ThinkingPart{Thought: p.Text})
+				parts = append(parts, ThinkingPart{
+					Thought:          p.Text,
+					ThoughtSignature: p.ThoughtSignature,
+				})
 			} else if p.Text != "" {
 				parts = append(parts, TextPart{Text: p.Text})
 			}
@@ -182,9 +190,10 @@ func (g *GeminiClient) convertResponse(raw *genai.GenerateContentResponse) (*Res
 					argsBytes = []byte("{}")
 				}
 				parts = append(parts, ToolCallPart{
-					ID:        p.FunctionCall.Name, // Gemini uses function name as identity in single-turn
-					Name:      p.FunctionCall.Name,
-					Arguments: string(argsBytes),
+					ID:               p.FunctionCall.Name, // Gemini uses function name as identity in single-turn
+					Name:             p.FunctionCall.Name,
+					Arguments:        string(argsBytes),
+					ThoughtSignature: p.ThoughtSignature,
 				})
 			}
 		}
@@ -262,7 +271,10 @@ func (s *geminiStream) consume(seq iter.Seq2[*genai.GenerateContentResponse, err
 
 		for _, p := range chunk.Candidates[0].Content.Parts {
 			if p.Thought {
-				accumulatedParts = append(accumulatedParts, ThinkingPart{Thought: p.Text})
+				accumulatedParts = append(accumulatedParts, ThinkingPart{
+					Thought:          p.Text,
+					ThoughtSignature: p.ThoughtSignature,
+				})
 				if !s.send(&StreamEvent{Type: EventThinkingDelta, Delta: p.Text}) {
 					return
 				}
@@ -275,9 +287,10 @@ func (s *geminiStream) consume(seq iter.Seq2[*genai.GenerateContentResponse, err
 			if p.FunctionCall != nil {
 				argsBytes, _ := json.Marshal(p.FunctionCall.Args)
 				tc := &ToolCallPart{
-					ID:        p.FunctionCall.Name,
-					Name:      p.FunctionCall.Name,
-					Arguments: string(argsBytes),
+					ID:               p.FunctionCall.Name,
+					Name:             p.FunctionCall.Name,
+					Arguments:        string(argsBytes),
+					ThoughtSignature: p.ThoughtSignature,
 				}
 				accumulatedParts = append(accumulatedParts, *tc)
 				if !s.send(&StreamEvent{Type: EventToolCallDelta, ToolCall: tc, Delta: string(argsBytes)}) {
