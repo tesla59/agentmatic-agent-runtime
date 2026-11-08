@@ -67,6 +67,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		tools.NewListPodsTool(k8sClient),
 		tools.NewGetPodLogsTool(k8sClient),
 		tools.NewGetEventsTool(k8sClient),
+		tools.NewListDeploymentsTool(k8sClient),
 	}
 	for _, t := range standardTools {
 		if err := registry.Register(chain.Wrap(t)); err != nil {
