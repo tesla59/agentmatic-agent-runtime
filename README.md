@@ -20,7 +20,7 @@ AgentMatic is an autonomous Kubernetes DevOps runtime and agent harness written 
 | Workloads | `k8s_list_statefulsets` | Namespaced | Planned | Database and stateful clustered workloads |
 | Workloads | `k8s_list_daemonsets` | Namespaced | Planned | Node-level agents and daemon distribution |
 | Workloads | `k8s_list_jobs` | Namespaced | Planned | Batch jobs and cron execution status |
-| Networking | `k8s_list_services` | Namespaced | Planned | Service types, ports, cluster IPs, and selectors |
+| Networking | `k8s_list_services` | Namespaced | Completed | Service types, ports, cluster IPs, and selectors |
 | Networking | `k8s_get_endpoints` | Namespaced | Planned | Inspect service endpoint resolution and healthy pod mappings |
 | Networking | `k8s_list_ingresses` | Namespaced | Planned | External routing rules, hosts, and TLS configuration |
 | Networking | `k8s_list_networkpolicies` | Namespaced | Planned | Pod-to-pod network security and traffic isolation |
