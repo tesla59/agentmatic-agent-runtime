@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": [
+    "name"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Name of the ConfigMap to inspect."
+    },
+    "namespace": {
+      "type": "string",
+      "description": "Namespace of the ConfigMap. Defaults to 'default'.",
+      "default": "default"
+    },
+    "full_output": {
+      "type": "boolean",
+      "description": "If true, bypasses metadata pruning and returns unpruned object.",
+      "default": false
+    }
+  }
+}

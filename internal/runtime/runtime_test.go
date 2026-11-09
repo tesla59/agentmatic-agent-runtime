@@ -40,8 +40,8 @@ func TestRuntimeNew_WithClientOverrides(t *testing.T) {
 	if rt.Registry == nil {
 		t.Error("expected initialized registry, got nil")
 	}
-	if len(rt.Registry.List()) != 7 {
-		t.Errorf("expected 7 registered tools, got %d", len(rt.Registry.List()))
+	if len(rt.Registry.List()) != 8 {
+		t.Errorf("expected 8 registered tools, got %d", len(rt.Registry.List()))
 	}
 }
 

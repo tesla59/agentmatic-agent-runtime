@@ -71,6 +71,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		tools.NewGetDeploymentTool(k8sClient),
 		tools.NewListNodesTool(k8sClient),
 		tools.NewListServicesTool(k8sClient),
+		tools.NewGetConfigMapTool(k8sClient),
 	}
 	for _, t := range standardTools {
 		if err := registry.Register(chain.Wrap(t)); err != nil {
