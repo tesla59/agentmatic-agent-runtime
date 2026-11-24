@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package agentmatic.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/tesla59/agentmatic-agent-runtime/gen/agentmatic/v1;agentmaticv1";
+
+// RuntimeService manages agent reasoning and task execution.
+service RuntimeService {
+  // Execute runs an instruction through the reasoning engine and streams execution events
+  // (thoughts, tool dispatches, tool results, and the final completion).
+  rpc Execute(ExecuteRequest) returns (stream ExecutionEvent);
+
+  // CancelExecution stops an active execution for a session.
+  rpc CancelExecution(CancelExecutionRequest) returns (CancelExecutionResponse);
+}
+
+// ExecuteRequest initiates or continues an execution turn with the agent.
+message ExecuteRequest {
+  // Optional. Session identifier to attach to. If omitted, a brand new session is automatically created.
+  oneof session_target {
+    string session_id = 1;
+    string session_name = 2;
+  }
+
+  // Required. The instruction or diagnostic question for the agent.
+  string prompt = 3;
+
+  // Optional. Execution configuration overrides for this turn.
+  ExecutionOptions options = 4;
+}
+
+// ExecutionOptions provides per-turn configuration overrides.
+message ExecutionOptions {
+  // Optional. Maximum reasoning steps allowed before terminating (defaults to runtime config).
+  optional int32 max_steps = 1;
+
+  // Optional. Model override (e.g. "gemini-2.5-flash", "gemini-2.5-pro").
+  optional string model_override = 2;
+}
+
+// ExecutionEvent represents a single streaming event during agent execution.
+message ExecutionEvent {
+  // Output only. Monotonically increasing step number in the current turn.
+  int32 step_index = 1;
+
+  // Output only. Unix timestamp in milliseconds when the event was emitted.
+  int64 timestamp_unix_ms = 2;
+
+  // Output only. Specific event payload. Exactly one of the following will be set.
+  oneof payload {
+    ThinkingEvent thinking = 3;
+    ToolCallEvent tool_call = 4;
+    ToolResultEvent tool_result = 5;
+    FinalAnswerEvent final_answer = 6;
+    ErrorEvent error = 7;
+  }
+}
+
+// ThinkingEvent streams model reasoning and thought process.
+message ThinkingEvent {
+  // Output only. Model reasoning text chunk.
+  string thought = 1;
+}
+
+// ToolCallEvent indicates the model is invoking a cluster tool.
+message ToolCallEvent {
+  // Output only. Unique identifier for this tool call.
+  string call_id = 1;
+
+  // Output only. Name of the tool being executed (e.g. "k8s_list_pods").
+  string tool_name = 2;
+
+  // Output only. Dynamic JSON arguments matching the tool schema, natively parsed in TypeScript/Angular.
+  google.protobuf.Struct arguments = 3;
+}
+
+// ToolResultEvent contains the sanitized result of a tool execution.
+message ToolResultEvent {
+  // Output only. Identifier matching the corresponding ToolCallEvent.
+  string call_id = 1;
+
+  // Output only. Name of the tool that produced this output.
+  string tool_name = 2;
+
+  // Output only. Output from the tool: structured JSON object or string (e.g. pod logs).
+  google.protobuf.Value result = 3;
+
+  // Output only. Whether the tool execution resulted in an error.
+  bool is_error = 4;
+}
+
+// FinalAnswerEvent contains the final response completing the execution turn.
+message FinalAnswerEvent {
+  // Output only. The final synthesized assistant response.
+  string answer = 1;
+
+  // Output only. Cumulative token and step metrics for the turn.
+  UsageMetrics usage = 2;
+}
+
+// UsageMetrics reports token and step consumption.
+message UsageMetrics {
+  // Output only. Total reasoning steps executed during the turn.
+  int32 total_steps = 1;
+
+  // Output only. Tokens consumed in prompt inputs.
+  int32 prompt_tokens = 2;
+
+  // Output only. Tokens generated across model thinking and outputs.
+  int32 completion_tokens = 3;
+
+  // Output only. Total tokens used (prompt + completion).
+  int32 total_tokens = 4;
+}
+
+// ErrorEvent communicates a fatal or turn-terminating error.
+message ErrorEvent {
+  // Output only. Human-readable error message.
+  string message = 1;
+
+  // Output only. Optional technical error details or diagnostics.
+  optional string details = 2;
+}
+
+// CancelExecutionRequest requests cancellation of an active execution.
+message CancelExecutionRequest {
+  // Required. Must specify either the session UUID 'id' or unique 'name' of the execution to cancel.
+  oneof identifier {
+    string id = 1;
+    string name = 2;
+  }
+}
+
+// CancelExecutionResponse confirms cancellation status.
+message CancelExecutionResponse {
+  // Output only. Whether the execution was successfully cancelled.
+  bool cancelled = 1;
+}

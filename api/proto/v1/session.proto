@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package agentmatic.v1;
+
+import "identity.proto";
+
+option go_package = "github.com/tesla59/agentmatic-agent-runtime/gen/agentmatic/v1;agentmaticv1";
+
+// SessionService manages the lifecycle, history, and metadata of multi-turn sessions.
+service SessionService {
+  // CreateSession initializes a new session.
+  rpc CreateSession(CreateSessionRequest) returns (SessionDetails);
+
+  // GetSession returns details and turn history for a specific session owned by the caller.
+  rpc GetSession(GetSessionRequest) returns (SessionDetails);
+
+  // ListSessions returns summaries of all sessions owned by the authenticated caller.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // DeleteSession permanently removes a session.
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+
+  // RenameSession updates the human-readable title or name of a session.
+  rpc RenameSession(RenameSessionRequest) returns (SessionDetails);
+
+  // RestartSession resets turn history while keeping the session identity.
+  rpc RestartSession(RestartSessionRequest) returns (SessionDetails);
+}
+
+// CreateSessionRequest initializes a new multi-turn conversation.
+message CreateSessionRequest {
+  // Optional. Human-readable slug/name (e.g. "api-crash-investigation").
+  optional string name = 1;
+
+  // Optional. Display title. If omitted, generated automatically from the first prompt.
+  optional string title = 2;
+}
+
+// GetSessionRequest retrieves session details and turn history.
+message GetSessionRequest {
+  // Required. Must specify either the session UUID 'id' or unique 'name'.
+  oneof identifier {
+    string id = 1;
+    string name = 2;
+  }
+}
+
+// ListSessionsRequest retrieves all sessions owned by the authenticated caller.
+message ListSessionsRequest {}
+
+// ListSessionsResponse contains summaries of sessions owned by the caller.
+message ListSessionsResponse {
+  // Output only. List of session summaries.
+  repeated SessionSummary sessions = 1;
+}
+
+// SessionSummary provides high-level metadata for session lists.
+message SessionSummary {
+  // Output only. Unique UUID of the session.
+  string id = 1;
+
+  // Output only. Optional unique human-readable slug/name.
+  optional string name = 2;
+
+  // Output only. Human-readable display title.
+  string title = 3;
+
+  // Output only. Operational status: "active", "running", or "paused".
+  string status = 4;
+
+  // Output only. Unix timestamp in milliseconds when last updated.
+  int64 updated_at_unix_ms = 5;
+
+  // Output only. Total number of completed conversation turns.
+  int32 turn_count = 6;
+
+  // Output only. Verified user identity owning this session.
+  UserIdentity owner = 7;
+}
+
+// SessionDetails provides full session metadata and turn history.
+message SessionDetails {
+  // Output only. Unique UUID of the session.
+  string id = 1;
+
+  // Output only. Optional unique human-readable slug/name.
+  optional string name = 2;
+
+  // Output only. Human-readable display title.
+  string title = 3;
+
+  // Output only. Operational status: "active", "running", or "paused".
+  string status = 4;
+
+  // Output only. Unix timestamp in milliseconds when created.
+  int64 created_at_unix_ms = 5;
+
+  // Output only. Unix timestamp in milliseconds when last updated.
+  int64 updated_at_unix_ms = 6;
+
+  // Output only. Total number of completed conversation turns.
+  int32 turn_count = 7;
+
+  // Output only. Ordered list of conversation turns.
+  repeated Turn turns = 8;
+
+  // Output only. Verified user identity owning this session.
+  UserIdentity owner = 9;
+}
+
+// Turn represents a single request-response exchange within a session.
+message Turn {
+  // Output only. 0-based sequential turn index.
+  int32 turn_index = 1;
+
+  // Output only. User prompt initiating this turn.
+  string user_prompt = 2;
+
+  // Output only. Final assistant response synthesized for this turn.
+  string assistant_response = 3;
+
+  // Output only. Unix timestamp in milliseconds when turn finished.
+  int64 timestamp_unix_ms = 4;
+}
+
+// DeleteSessionRequest permanently removes a session.
+message DeleteSessionRequest {
+  // Required. Must specify either the session UUID 'id' or unique 'name' to permanently delete.
+  oneof identifier {
+    string id = 1;
+    string name = 2;
+  }
+}
+
+// DeleteSessionResponse confirms deletion status.
+message DeleteSessionResponse {
+  // Output only. Whether the session was successfully deleted.
+  bool deleted = 1;
+}
+
+// RenameSessionRequest updates the display title or slug of a session.
+message RenameSessionRequest {
+  // Required. Must specify either the session UUID 'id' or unique 'name' of the session to rename.
+  oneof identifier {
+    string id = 1;
+    string name = 2;
+  }
+
+  // Optional. New display title for the session.
+  optional string new_title = 3;
+
+  // Optional. New unique slug/name for the session.
+  optional string new_name = 4;
+}
+
+// RestartSessionRequest resets turn history while keeping session metadata.
+message RestartSessionRequest {
+  // Required. Must specify either the session UUID 'id' or unique 'name' of the session to reset.
+  oneof identifier {
+    string id = 1;
+    string name = 2;
+  }
+}

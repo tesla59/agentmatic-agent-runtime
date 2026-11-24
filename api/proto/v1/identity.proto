@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package agentmatic.v1;
+
+option go_package = "github.com/tesla59/agentmatic-agent-runtime/gen/agentmatic/v1;agentmaticv1";
+
+// UserIdentity holds verified Kubernetes identity attributes.
+message UserIdentity {
+  // Output only. Identifier of the target Kubernetes cluster.
+  string cluster_id = 1;
+
+  // Output only. Immutable, verified user UID from the Kubernetes TokenReview API.
+  string user_uid = 2;
+
+  // Output only. Authenticated Kubernetes username (e.g. "alice@company.com").
+  string username = 3;
+
+  // Output only. Groups the user belongs to in Kubernetes.
+  repeated string groups = 4;
+
+  // Output only. Optional display name if resolved via identity provider.
+  optional string display_name = 5;
+
+  // Output only. Optional user email address.
+  optional string email = 6;
+}
