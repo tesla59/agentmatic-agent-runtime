@@ -47,6 +47,7 @@ func TestNewSession(t *testing.T) {
 
 	sess, err := New(Config{
 		Engine: eng,
+		Owner:  LocalDevIdentity(),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error creating session: %v", err)
@@ -88,7 +89,7 @@ func TestSessionExecute_MultiTurn(t *testing.T) {
 		},
 	}
 	eng := createTestEngine(mock)
-	sess, err := New(Config{Engine: eng})
+	sess, err := New(Config{Engine: eng, Owner: LocalDevIdentity()})
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestSessionPauseResume(t *testing.T) {
 		},
 	}
 	eng := createTestEngine(mock)
-	sess, err := New(Config{Engine: eng})
+	sess, err := New(Config{Engine: eng, Owner: LocalDevIdentity()})
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestSessionRestart(t *testing.T) {
 		},
 	}
 	eng := createTestEngine(mock)
-	sess, _ := New(Config{Engine: eng})
+	sess, _ := New(Config{Engine: eng, Owner: LocalDevIdentity()})
 
 	_, err := sess.Execute(context.Background(), "Turn before restart")
 	if err != nil {
@@ -217,7 +218,7 @@ func TestSessionRestart(t *testing.T) {
 
 func TestSessionRename(t *testing.T) {
 	eng := createTestEngine(&mockLLM{})
-	sess, _ := New(Config{Engine: eng, Title: "Original"})
+	sess, _ := New(Config{Engine: eng, Owner: LocalDevIdentity(), Title: "Original"})
 
 	if err := sess.Rename("Updated Investigation"); err != nil {
 		t.Fatalf("rename failed: %v", err)
@@ -236,7 +237,7 @@ func TestSessionExecute_ErrorRollback(t *testing.T) {
 		responses: []*llm.Response{}, // empty, will cause chat error
 	}
 	eng := createTestEngine(mock)
-	sess, _ := New(Config{Engine: eng})
+	sess, _ := New(Config{Engine: eng, Owner: LocalDevIdentity()})
 
 	initialLen := len(sess.History())
 
@@ -254,8 +255,13 @@ func TestSessionExecute_ErrorRollback(t *testing.T) {
 func TestSessionOwnerAndName(t *testing.T) {
 	eng := createTestEngine(&mockLLM{})
 
-	// 1. Default local identity when owner omitted
-	localSess, err := New(Config{Engine: eng})
+	// 1. Missing owner (both empty) must fail closed
+	if _, err := New(Config{Engine: eng}); err == nil {
+		t.Fatal("expected error when owner is omitted, got nil")
+	}
+
+	// 1b. LocalDevIdentity works explicitly for local mode
+	localSess, err := New(Config{Engine: eng, Owner: LocalDevIdentity()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

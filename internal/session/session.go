@@ -45,10 +45,14 @@ func LocalDevIdentity() Identity {
 	}
 }
 
+// Valid reports whether the identity carries both a cluster ID and user UID.
+func (i Identity) Valid() bool {
+	return strings.TrimSpace(i.ClusterID) != "" && strings.TrimSpace(i.UserUID) != ""
+}
+
 // SameOwner reports whether both identities identify the same cluster and user UID.
 func (i Identity) SameOwner(other Identity) bool {
-	return i.ClusterID != "" && i.UserUID != "" &&
-		i.ClusterID == other.ClusterID && i.UserUID == other.UserUID
+	return i.Valid() && i.ClusterID == other.ClusterID && i.UserUID == other.UserUID
 }
 
 func cloneIdentity(id Identity) Identity {
@@ -106,12 +110,9 @@ func New(cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("engine is required")
 	}
 
-	// TODO(stage-3b): remove fallback and strictly require both ClusterID and UserUID once repl.go and store tests pass LocalDevIdentity() explicitly.
 	owner := cfg.Owner
-	if owner.ClusterID == "" && owner.UserUID == "" {
-		owner = LocalDevIdentity()
-	} else if owner.ClusterID == "" || owner.UserUID == "" {
-		return nil, fmt.Errorf("owner cluster_id and user_uid are both required")
+	if !owner.Valid() {
+		return nil, fmt.Errorf("owner cluster_id and user_uid are required")
 	}
 
 	id := cfg.ID
@@ -247,7 +248,7 @@ func Restore(snap Snapshot, eng *engine.Engine) (*Session, error) {
 	if snap.ID == "" {
 		return nil, fmt.Errorf("session ID is required")
 	}
-	if snap.Owner.ClusterID == "" || snap.Owner.UserUID == "" {
+	if !snap.Owner.Valid() {
 		return nil, fmt.Errorf("session owner cluster_id and user_uid are required")
 	}
 

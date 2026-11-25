@@ -24,22 +24,27 @@ func runREPL(ctx context.Context) error {
 		return fmt.Errorf("initialize runtime: %w", err)
 	}
 
+	localOwner := session.LocalDevIdentity()
+
 	store, err := session.NewFileStore("")
 	if err != nil {
 		return fmt.Errorf("initialize session store: %w", err)
 	}
 
 	sm := session.NewSessionManager(store)
-	if err := sm.LoadAll(rt.Engine); err != nil {
+	if err := sm.LoadAll(ctx, rt.Engine); err != nil {
 		slog.Warn("failed to load some sessions from disk", "error", err)
 	}
 
 	// Initialize active session
-	activeSess, err := session.New(session.Config{Engine: rt.Engine})
+	activeSess, err := session.New(session.Config{
+		Engine: rt.Engine,
+		Owner:  localOwner,
+	})
 	if err != nil {
 		return fmt.Errorf("create initial session: %w", err)
 	}
-	if err := sm.Register(activeSess); err != nil {
+	if err := sm.Register(ctx, activeSess); err != nil {
 		return fmt.Errorf("register initial session: %w", err)
 	}
 
@@ -59,7 +64,7 @@ func runREPL(ctx context.Context) error {
 
 		// Handle slash commands
 		if strings.HasPrefix(line, "/") {
-			done, err := handleCommand(line, &activeSess, sm, rt.Engine)
+			done, err := handleCommand(ctx, localOwner, line, &activeSess, sm, rt.Engine)
 			if err != nil {
 				fmt.Printf("Command error: %v\n\n", err)
 			}
@@ -98,7 +103,7 @@ func runREPL(ctx context.Context) error {
 		}
 
 		// Persist turn to disk
-		_ = sm.Save(activeSess)
+		_ = sm.Save(ctx, activeSess)
 
 		// Auto-title fresh sessions on first prompt
 		if activeSess.Title() == "New Session" {
@@ -107,7 +112,7 @@ func runREPL(ctx context.Context) error {
 				autoTitle = autoTitle[:35] + "..."
 			}
 			_ = activeSess.Rename(autoTitle)
-			_ = sm.Save(activeSess)
+			_ = sm.Save(ctx, activeSess)
 		}
 
 		fmt.Printf("\n%s\n\n", res.Answer)
@@ -116,7 +121,7 @@ func runREPL(ctx context.Context) error {
 	return scanner.Err()
 }
 
-func handleCommand(cmdLine string, activeSess **session.Session, sm *session.SessionManager, eng *engine.Engine) (bool, error) {
+func handleCommand(ctx context.Context, owner session.Identity, cmdLine string, activeSess **session.Session, sm *session.SessionManager, eng *engine.Engine) (bool, error) {
 	parts := strings.Fields(cmdLine)
 	cmd := strings.ToLower(parts[0])
 	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, parts[0]))
@@ -130,11 +135,14 @@ func handleCommand(cmdLine string, activeSess **session.Session, sm *session.Ses
 		return false, nil
 
 	case "/new":
-		newSess, err := session.New(session.Config{Engine: eng})
+		newSess, err := session.New(session.Config{
+			Engine: eng,
+			Owner:  owner,
+		})
 		if err != nil {
 			return false, fmt.Errorf("create new session: %w", err)
 		}
-		if err := sm.Register(newSess); err != nil {
+		if err := sm.Register(ctx, newSess); err != nil {
 			return false, fmt.Errorf("register session: %w", err)
 		}
 		*activeSess = newSess
@@ -142,14 +150,14 @@ func handleCommand(cmdLine string, activeSess **session.Session, sm *session.Ses
 		return false, nil
 
 	case "/sessions", "/list":
-		listSessions(sm, (*activeSess).ID())
+		listSessions(sm, owner, (*activeSess).ID())
 		return false, nil
 
 	case "/resume":
 		if args == "" {
-			return false, errors.New("usage: /resume <session-id>")
+			return false, errors.New("usage: /resume <session-id-or-name>")
 		}
-		target, ok := findSession(sm, args)
+		target, ok := findSession(sm, owner, args)
 		if !ok {
 			return false, fmt.Errorf("no session found matching %q", args)
 		}
@@ -164,7 +172,7 @@ func handleCommand(cmdLine string, activeSess **session.Session, sm *session.Ses
 		if err := (*activeSess).Rename(args); err != nil {
 			return false, err
 		}
-		_ = sm.Save(*activeSess)
+		_ = sm.Save(ctx, *activeSess)
 		fmt.Printf("Session renamed to: %s\n\n", args)
 		return false, nil
 
@@ -172,16 +180,21 @@ func handleCommand(cmdLine string, activeSess **session.Session, sm *session.Ses
 		if err := (*activeSess).Restart(); err != nil {
 			return false, err
 		}
-		_ = sm.Save(*activeSess)
+		_ = sm.Save(ctx, *activeSess)
 		fmt.Println("Session restarted. Conversation history cleared.")
 		return false, nil
 
 	case "/info":
 		s := *activeSess
 		usage := s.TotalUsage()
+		o := s.Owner()
 		fmt.Printf("\n--- Active Session ---\n")
 		fmt.Printf("ID:         %s\n", s.ID())
+		if s.Name() != "" {
+			fmt.Printf("Name:       %s\n", s.Name())
+		}
 		fmt.Printf("Title:      %s\n", s.Title())
+		fmt.Printf("Owner:      %s (%s/%s)\n", o.Username, o.ClusterID, o.UserUID)
 		fmt.Printf("Status:     %s\n", s.Status())
 		fmt.Printf("Messages:   %d\n", len(s.History()))
 		fmt.Printf("Tokens:     %d (prompt: %d, completion: %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
@@ -193,8 +206,8 @@ func handleCommand(cmdLine string, activeSess **session.Session, sm *session.Ses
 	}
 }
 
-func listSessions(sm *session.SessionManager, activeID string) {
-	sessions := sm.List()
+func listSessions(sm *session.SessionManager, owner session.Identity, activeID string) {
+	sessions := sm.List(owner)
 	if len(sessions) == 0 {
 		fmt.Println("No stored sessions found.")
 		return
@@ -214,17 +227,17 @@ func listSessions(sm *session.SessionManager, activeID string) {
 			s.TotalUsage().TotalTokens,
 		)
 	}
-	fmt.Println("\nUse /resume <id> to switch sessions (* marks active).")
+	fmt.Println("\nUse /resume <id-or-name> to switch sessions (* marks active).")
 }
 
-func findSession(sm *session.SessionManager, target string) (*session.Session, bool) {
-	// Exact ID match
-	if s, ok := sm.Get(target); ok {
+func findSession(sm *session.SessionManager, owner session.Identity, target string) (*session.Session, bool) {
+	// Exact ID or slug name match
+	if s, ok := sm.Resolve(owner, target); ok {
 		return s, true
 	}
 
 	// Prefix match on UUID (convenient for typing first few chars)
-	for _, s := range sm.List() {
+	for _, s := range sm.List(owner) {
 		if strings.HasPrefix(s.ID(), target) {
 			return s, true
 		}
