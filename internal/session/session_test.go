@@ -250,3 +250,85 @@ func TestSessionExecute_ErrorRollback(t *testing.T) {
 		t.Errorf("history length changed after failed execute: got %d, expected %d", len(sess.History()), initialLen)
 	}
 }
+
+func TestSessionOwnerAndName(t *testing.T) {
+	eng := createTestEngine(&mockLLM{})
+
+	// 1. Default local identity when owner omitted
+	localSess, err := New(Config{Engine: eng})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !localSess.Owner().SameOwner(LocalDevIdentity()) {
+		t.Errorf("expected LocalDevIdentity, got %+v", localSess.Owner())
+	}
+
+	// 2. Partial owner rejected
+	_, err = New(Config{
+		Engine: eng,
+		Owner:  Identity{ClusterID: "prod-us"},
+	})
+	if err == nil {
+		t.Fatal("expected error for partial owner identity, got nil")
+	}
+
+	// 3. Explicit owner + defensive group copy + slug name
+	alice := Identity{
+		ClusterID: "prod-us",
+		UserUID:   "uid-alice",
+		Username:  "alice@company.com",
+		Groups:    []string{"sre", "devs"},
+	}
+	sess, err := New(Config{
+		Engine: eng,
+		Name:   "  api-502-debug  ",
+		Title:  "API 502 Outage",
+		Owner:  alice,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sess.Name() != "api-502-debug" {
+		t.Errorf("expected trimmed name 'api-502-debug', got %q", sess.Name())
+	}
+
+	// Mutating original slice must not affect session owner
+	alice.Groups[0] = "mutated"
+	if sess.Owner().Groups[0] != "sre" {
+		t.Errorf("expected defensive copy of owner groups, got %v", sess.Owner().Groups)
+	}
+
+	// SetName validation and update
+	if err := sess.SetName("   "); err == nil {
+		t.Error("expected error for empty session name, got nil")
+	}
+	if err := sess.SetName("api-502-resolved"); err != nil {
+		t.Fatalf("SetName failed: %v", err)
+	}
+	if sess.Name() != "api-502-resolved" {
+		t.Errorf("expected updated name 'api-502-resolved', got %q", sess.Name())
+	}
+
+	// Snapshot -> Restore preserves Owner & Name
+	snap := sess.Snapshot()
+	restored, err := Restore(snap, eng)
+	if err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+	if restored.Name() != "api-502-resolved" {
+		t.Errorf("expected restored name 'api-502-resolved', got %q", restored.Name())
+	}
+	if !restored.Owner().SameOwner(alice) {
+		t.Errorf("expected restored owner %+v, got %+v", alice, restored.Owner())
+	}
+	if restored.Owner().SameOwner(Identity{ClusterID: "staging", UserUID: "uid-alice"}) {
+		t.Error("SameOwner must be false across different clusters")
+	}
+
+	// Restore rejects snapshot without owner
+	snapNoOwner := snap
+	snapNoOwner.Owner = Identity{}
+	if _, err := Restore(snapNoOwner, eng); err == nil {
+		t.Error("expected Restore to fail when snapshot owner is empty")
+	}
+}

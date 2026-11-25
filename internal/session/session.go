@@ -26,10 +26,46 @@ var (
 	ErrEmptyPrompt   = errors.New("prompt cannot be empty")
 )
 
+// Identity holds the verified Kubernetes identity attributes of a session owner.
+type Identity struct {
+	ClusterID   string   `json:"cluster_id"`
+	UserUID     string   `json:"user_uid"`
+	Username    string   `json:"username"`
+	Groups      []string `json:"groups,omitempty"`
+	DisplayName string   `json:"display_name,omitempty"`
+	Email       string   `json:"email,omitempty"`
+}
+
+// LocalDevIdentity returns the default owner identity for standalone local debugging.
+func LocalDevIdentity() Identity {
+	return Identity{
+		ClusterID: "local",
+		UserUID:   "local-dev",
+		Username:  "tesla59",
+	}
+}
+
+// SameOwner reports whether both identities identify the same cluster and user UID.
+func (i Identity) SameOwner(other Identity) bool {
+	return i.ClusterID != "" && i.UserUID != "" &&
+		i.ClusterID == other.ClusterID && i.UserUID == other.UserUID
+}
+
+func cloneIdentity(id Identity) Identity {
+	cloned := id
+	if len(id.Groups) > 0 {
+		cloned.Groups = make([]string, len(id.Groups))
+		copy(cloned.Groups, id.Groups)
+	}
+	return cloned
+}
+
 // Config configures a new Session instance.
 type Config struct {
 	ID           string
+	Name         string
 	Title        string
+	Owner        Identity
 	SystemPrompt string
 	Engine       *engine.Engine
 }
@@ -37,7 +73,9 @@ type Config struct {
 // Snapshot is a detached serializable point-in-time representation of a Session.
 type Snapshot struct {
 	ID           string        `json:"id"`
+	Name         string        `json:"name,omitempty"`
 	Title        string        `json:"title"`
+	Owner        Identity      `json:"owner"`
 	Status       Status        `json:"status"`
 	History      []llm.Message `json:"history"`
 	SystemPrompt string        `json:"system_prompt,omitempty"`
@@ -50,7 +88,9 @@ type Snapshot struct {
 type Session struct {
 	mu           sync.RWMutex
 	id           string
+	name         string
 	title        string
+	owner        Identity
 	status       Status
 	history      []llm.Message
 	systemPrompt string
@@ -66,10 +106,20 @@ func New(cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("engine is required")
 	}
 
+	// TODO(stage-3b): remove fallback and strictly require both ClusterID and UserUID once repl.go and store tests pass LocalDevIdentity() explicitly.
+	owner := cfg.Owner
+	if owner.ClusterID == "" && owner.UserUID == "" {
+		owner = LocalDevIdentity()
+	} else if owner.ClusterID == "" || owner.UserUID == "" {
+		return nil, fmt.Errorf("owner cluster_id and user_uid are both required")
+	}
+
 	id := cfg.ID
 	if id == "" {
 		id = uuid.NewString()
 	}
+
+	name := strings.TrimSpace(cfg.Name)
 
 	title := strings.TrimSpace(cfg.Title)
 	if title == "" {
@@ -89,7 +139,9 @@ func New(cfg Config) (*Session, error) {
 
 	return &Session{
 		id:           id,
+		name:         name,
 		title:        title,
+		owner:        cloneIdentity(owner),
 		status:       StatusActive,
 		history:      initialHistory,
 		systemPrompt: sysPrompt,
@@ -106,11 +158,25 @@ func (s *Session) ID() string {
 	return s.id
 }
 
+// Name returns the optional human-readable slug/name of the session.
+func (s *Session) Name() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.name
+}
+
 // Title returns the human-readable session title.
 func (s *Session) Title() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.title
+}
+
+// Owner returns a defensive copy of the verified session owner identity.
+func (s *Session) Owner() Identity {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneIdentity(s.owner)
 }
 
 // Status returns the current operational status of the session.
@@ -161,7 +227,9 @@ func (s *Session) Snapshot() Snapshot {
 
 	return Snapshot{
 		ID:           s.id,
+		Name:         s.name,
 		Title:        s.title,
+		Owner:        cloneIdentity(s.owner),
 		Status:       s.status,
 		History:      hist,
 		SystemPrompt: s.systemPrompt,
@@ -179,13 +247,18 @@ func Restore(snap Snapshot, eng *engine.Engine) (*Session, error) {
 	if snap.ID == "" {
 		return nil, fmt.Errorf("session ID is required")
 	}
+	if snap.Owner.ClusterID == "" || snap.Owner.UserUID == "" {
+		return nil, fmt.Errorf("session owner cluster_id and user_uid are required")
+	}
 
 	hist := make([]llm.Message, len(snap.History))
 	copy(hist, snap.History)
 
 	return &Session{
 		id:           snap.ID,
+		name:         strings.TrimSpace(snap.Name),
 		title:        snap.Title,
+		owner:        cloneIdentity(snap.Owner),
 		status:       snap.Status,
 		history:      hist,
 		systemPrompt: snap.SystemPrompt,
@@ -207,6 +280,21 @@ func (s *Session) Rename(title string) error {
 	defer s.mu.Unlock()
 
 	s.title = trimmed
+	s.updatedAt = time.Now()
+	return nil
+}
+
+// SetName updates the human-readable slug/name of the session.
+func (s *Session) SetName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return errors.New("session name cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.name = trimmed
 	s.updatedAt = time.Now()
 	return nil
 }
