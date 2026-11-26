@@ -2,12 +2,14 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/tesla59/agentmatic-agent-runtime/internal/auth"
 	"github.com/tesla59/agentmatic-agent-runtime/internal/engine"
 	"github.com/tesla59/agentmatic-agent-runtime/internal/interceptor"
 	"github.com/tesla59/agentmatic-agent-runtime/internal/k8s"
@@ -29,17 +31,22 @@ type Config struct {
 	MaxOutputBytes int
 	StepListener   engine.StepListener
 
-	// Optional client overrides for testing or custom embedding
-	K8sClient kubernetes.Interface
-	LLMClient llm.Client
+	// EnforceRBAC enables Kubernetes SubjectAccessReview checks before tool execution when Authorizer is nil.
+	EnforceRBAC bool
+
+	// Optional client/policy overrides for testing or custom embedding
+	K8sClient  kubernetes.Interface
+	LLMClient  llm.Client
+	Authorizer auth.Authorizer
 }
 
 // Runtime bundles the assembled agent engine, tool registry, and underlying clients.
 type Runtime struct {
-	K8s      kubernetes.Interface
-	Registry *tools.Registry
-	LLM      llm.Client
-	Engine   *engine.Engine
+	K8s        kubernetes.Interface
+	Authorizer auth.Authorizer
+	Registry   *tools.Registry
+	LLM        llm.Client
+	Engine     *engine.Engine
 }
 
 // New initializes all infrastructure components and returns an assembled Runtime.
@@ -53,6 +60,19 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		})
 		if err != nil {
 			return nil, fmt.Errorf("initialize k8s client: %w", err)
+		}
+	}
+
+	authorizer := cfg.Authorizer
+	if authorizer == nil {
+		if cfg.EnforceRBAC {
+			var err error
+			authorizer, err = auth.NewSARAuthorizer(k8sClient)
+			if err != nil {
+				return nil, fmt.Errorf("initialize authorizer: %w", err)
+			}
+		} else {
+			authorizer = auth.NewAllowAllAuthorizer()
 		}
 	}
 
@@ -74,7 +94,11 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		tools.NewGetConfigMapTool(k8sClient),
 	}
 	for _, t := range standardTools {
-		if err := registry.Register(chain.Wrap(t)); err != nil {
+		wrapped := &authorizedTool{
+			Tool:       chain.Wrap(t),
+			authorizer: authorizer,
+		}
+		if err := registry.Register(wrapped); err != nil {
 			return nil, fmt.Errorf("register tool %s: %w", t.Name(), err)
 		}
 	}
@@ -100,11 +124,24 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 
 	return &Runtime{
-		K8s:      k8sClient,
-		Registry: registry,
-		LLM:      llmClient,
-		Engine:   eng,
+		K8s:        k8sClient,
+		Authorizer: authorizer,
+		Registry:   registry,
+		LLM:        llmClient,
+		Engine:     eng,
 	}, nil
+}
+
+type authorizedTool struct {
+	tools.Tool
+	authorizer auth.Authorizer
+}
+
+func (t *authorizedTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	if err := t.authorizer.Authorize(ctx, t.Tool.Name(), rawArgs); err != nil {
+		return "", err
+	}
+	return t.Tool.Execute(ctx, rawArgs)
 }
 
 func initLLMClient(ctx context.Context, cfg Config) (llm.Client, error) {
