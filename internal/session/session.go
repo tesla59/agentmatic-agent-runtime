@@ -91,6 +91,7 @@ type Snapshot struct {
 // Session encapsulates an ongoing interactive multi-turn agent conversation.
 type Session struct {
 	mu           sync.RWMutex
+	execMu       sync.Mutex // Serializes active Execute/Restart operations without blocking metadata reads
 	id           string
 	name         string
 	title        string
@@ -154,8 +155,6 @@ func New(cfg Config) (*Session, error) {
 
 // ID returns the unique session identifier.
 func (s *Session) ID() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.id
 }
 
@@ -175,8 +174,6 @@ func (s *Session) Title() string {
 
 // Owner returns a defensive copy of the verified session owner identity.
 func (s *Session) Owner() Identity {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return cloneIdentity(s.owner)
 }
 
@@ -206,8 +203,6 @@ func (s *Session) History() []llm.Message {
 
 // CreatedAt returns the session creation timestamp.
 func (s *Session) CreatedAt() time.Time {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.createdAt
 }
 
@@ -322,6 +317,9 @@ func (s *Session) Resume() error {
 
 // Restart clears the conversation history, resetting to the initial system prompt and active status.
 func (s *Session) Restart() error {
+	s.execMu.Lock()
+	defer s.execMu.Unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -344,30 +342,33 @@ func (s *Session) Execute(ctx context.Context, prompt string) (*engine.RunResult
 		return nil, ErrEmptyPrompt
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.execMu.Lock()
+	defer s.execMu.Unlock()
 
+	s.mu.RLock()
 	if s.status == StatusPaused {
+		s.mu.RUnlock()
 		return nil, ErrSessionPaused
 	}
+	histCopy := make([]llm.Message, len(s.history), len(s.history)+1)
+	copy(histCopy, s.history)
+	s.mu.RUnlock()
 
-	// Append the new user prompt
-	s.history = append(s.history, llm.UserMessage(trimmed))
+	histCopy = append(histCopy, llm.UserMessage(trimmed))
 
-	// Run engine with the updated history
-	res, err := s.engine.RunWithHistory(ctx, s.history)
+	// Run engine without holding s.mu so metadata reads, listings, and cancellations remain responsive.
+	res, err := s.engine.RunWithHistory(ctx, histCopy)
 	if err != nil {
-		// Revert appended user message on failure to keep history consistent
-		s.history = s.history[:len(s.history)-1]
 		return nil, err
 	}
 
-	// Update conversation history with the complete turn (user, tool calls/results, assistant answer)
+	s.mu.Lock()
 	s.history = res.History
 	s.totalUsage.PromptTokens += res.Usage.PromptTokens
 	s.totalUsage.CompletionTokens += res.Usage.CompletionTokens
 	s.totalUsage.TotalTokens += res.Usage.TotalTokens
 	s.updatedAt = time.Now()
+	s.mu.Unlock()
 
 	return res, nil
 }
