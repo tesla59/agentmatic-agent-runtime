@@ -170,3 +170,51 @@ func TestEngineMaxStepsExceeded(t *testing.T) {
 		t.Fatal("expected max steps exceeded error, got nil")
 	}
 }
+
+func TestEngineContextStepListenerAndErrorFlag(t *testing.T) {
+	mock := &mockLLM{
+		turns: []*llm.Response{
+			{
+				Message: llm.AssistantMessage(
+					llm.ToolCallPart{ID: "call_missing", Name: "missing_tool", Arguments: `{}`},
+				),
+			},
+			{
+				Message: llm.AssistantMessage(
+					llm.TextPart{Text: "Handled error gracefully."},
+				),
+			},
+		},
+	}
+
+	var defaultCalled bool
+	eng, err := New(Config{
+		Client:   mock,
+		Registry: tools.NewRegistry(),
+		OnStep: func(Step) {
+			defaultCalled = true
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	var ctxSteps []Step
+	ctx := WithStepListener(context.Background(), func(s Step) {
+		ctxSteps = append(ctxSteps, s)
+	})
+
+	res, err := eng.Run(ctx, "Trigger missing tool")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if res.Answer != "Handled error gracefully." {
+		t.Errorf("unexpected answer: %q", res.Answer)
+	}
+	if defaultCalled {
+		t.Error("expected context StepListener to override default OnStep")
+	}
+	if len(ctxSteps) != 1 || !ctxSteps[0].IsError {
+		t.Fatalf("expected 1 error step on context listener, got %+v", ctxSteps)
+	}
+}

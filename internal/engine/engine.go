@@ -23,6 +23,7 @@ type Step struct {
 	Message     string            `json:"message,omitempty"`
 	Action      *llm.ToolCallPart `json:"action,omitempty"`
 	Observation string            `json:"observation,omitempty"`
+	IsError     bool              `json:"is_error,omitempty"`
 }
 
 // RunResult contains the complete outcome of a task execution.
@@ -35,6 +36,25 @@ type RunResult struct {
 
 // StepListener receives real-time notifications after each tool execution step.
 type StepListener func(step Step)
+
+type stepListenerKey struct{}
+
+// WithStepListener attaches a per-execution StepListener to ctx, overriding Engine's default OnStep for that run.
+func WithStepListener(ctx context.Context, listener StepListener) context.Context {
+	if listener == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, stepListenerKey{}, listener)
+}
+
+// StepListenerFromContext extracts the per-execution StepListener from ctx if present.
+func StepListenerFromContext(ctx context.Context) StepListener {
+	if ctx == nil {
+		return nil
+	}
+	listener, _ := ctx.Value(stepListenerKey{}).(StepListener)
+	return listener
+}
 
 // Config holds configuration options for initializing the Engine.
 type Config struct {
@@ -115,6 +135,11 @@ func (e *Engine) RunWithHistory(ctx context.Context, history []llm.Message) (*Ru
 	hist := make([]llm.Message, len(history))
 	copy(hist, history)
 
+	listener := StepListenerFromContext(ctx)
+	if listener == nil {
+		listener = e.onStep
+	}
+
 	for stepNum := 1; stepNum <= e.maxSteps; stepNum++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -174,11 +199,12 @@ func (e *Engine) RunWithHistory(ctx context.Context, history []llm.Message) (*Ru
 				Message:     resp.Message.Text(),
 				Action:      &tc,
 				Observation: observation,
+				IsError:     isError,
 			}
 			steps = append(steps, stepRecord)
 
-			if e.onStep != nil {
-				e.onStep(stepRecord)
+			if listener != nil {
+				listener(stepRecord)
 			}
 		}
 	}
