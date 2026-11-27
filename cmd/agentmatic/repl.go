@@ -5,47 +5,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
-
-	"github.com/tesla59/agentmatic-agent-runtime/internal/engine"
-	"github.com/tesla59/agentmatic-agent-runtime/internal/runtime"
-	"github.com/tesla59/agentmatic-agent-runtime/internal/session"
+	"time"
 )
 
-// runREPL starts an interactive terminal session loop.
-func runREPL(ctx context.Context) error {
-	rt, err := runtime.New(ctx, runtime.Config{
-		StepListener: replStepListener,
-	})
-	if err != nil {
-		return fmt.Errorf("initialize runtime: %w", err)
-	}
-
-	localOwner := session.LocalDevIdentity()
-
-	store, err := session.NewFileStore("")
-	if err != nil {
-		return fmt.Errorf("initialize session store: %w", err)
-	}
-
-	sm := session.NewSessionManager(store)
-	if err := sm.LoadAll(ctx, rt.Engine); err != nil {
-		slog.Warn("failed to load some sessions from disk", "error", err)
-	}
-
-	// Initialize active session
-	activeSess, err := session.New(session.Config{
-		Engine: rt.Engine,
-		Owner:  localOwner,
-	})
-	if err != nil {
-		return fmt.Errorf("create initial session: %w", err)
-	}
-	if err := sm.Register(ctx, activeSess); err != nil {
-		return fmt.Errorf("register initial session: %w", err)
+// runREPL starts an interactive terminal session loop backed by AgentClient (remote or local).
+func runREPL(ctx context.Context, client AgentClient, sessionRef string) error {
+	var activeSess SessionInfo
+	var err error
+	if trimmed := strings.TrimSpace(sessionRef); trimmed != "" {
+		activeSess, err = client.GetSession(ctx, trimmed)
+		if err != nil {
+			return fmt.Errorf("resume session %q: %w", trimmed, err)
+		}
+	} else {
+		activeSess, err = client.CreateSession(ctx, "", "")
+		if err != nil {
+			return fmt.Errorf("create initial session: %w", err)
+		}
 	}
 
 	printBanner(activeSess)
@@ -62,9 +41,8 @@ func runREPL(ctx context.Context) error {
 			continue
 		}
 
-		// Handle slash commands
 		if strings.HasPrefix(line, "/") {
-			done, err := handleCommand(ctx, localOwner, line, &activeSess, sm, rt.Engine)
+			done, err := handleCommand(ctx, client, line, &activeSess)
 			if err != nil {
 				fmt.Printf("Command error: %v\n\n", err)
 			}
@@ -75,7 +53,6 @@ func runREPL(ctx context.Context) error {
 			continue
 		}
 
-		// Execute user prompt with turn cancellation support (Ctrl+C cancels turn, not REPL)
 		turnCtx, cancel := context.WithCancel(ctx)
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt)
@@ -83,13 +60,16 @@ func runREPL(ctx context.Context) error {
 		go func() {
 			select {
 			case <-sigChan:
-				fmt.Println("\n[Execution cancelled by user]")
+				fmt.Println("\n[Cancelling execution...]")
+				cancelCtx, cancelTimeout := context.WithTimeout(context.Background(), 3*time.Second)
+				_ = client.CancelExecution(cancelCtx, activeSess.ID)
+				cancelTimeout()
 				cancel()
 			case <-turnCtx.Done():
 			}
 		}()
 
-		res, err := activeSess.Execute(turnCtx, line)
+		outcome, err := client.Execute(turnCtx, activeSess.ID, line, terminalStreamCallbacks())
 		signal.Stop(sigChan)
 		cancel()
 
@@ -102,26 +82,18 @@ func runREPL(ctx context.Context) error {
 			continue
 		}
 
-		// Persist turn to disk
-		_ = sm.Save(ctx, activeSess)
-
-		// Auto-title fresh sessions on first prompt
-		if activeSess.Title() == "New Session" {
-			autoTitle := line
-			if len(autoTitle) > 35 {
-				autoTitle = autoTitle[:35] + "..."
-			}
-			_ = activeSess.Rename(autoTitle)
-			_ = sm.Save(ctx, activeSess)
+		// Refresh session metadata (title/turns/updated_at) after completion.
+		if refreshed, refreshErr := client.GetSession(ctx, outcome.SessionID); refreshErr == nil {
+			activeSess = refreshed
 		}
 
-		fmt.Printf("\n%s\n\n", res.Answer)
+		fmt.Printf("\n%s\n\n", outcome.Answer)
 	}
 
 	return scanner.Err()
 }
 
-func handleCommand(ctx context.Context, owner session.Identity, cmdLine string, activeSess **session.Session, sm *session.SessionManager, eng *engine.Engine) (bool, error) {
+func handleCommand(ctx context.Context, client AgentClient, cmdLine string, activeSess *SessionInfo) (bool, error) {
 	parts := strings.Fields(cmdLine)
 	cmd := strings.ToLower(parts[0])
 	args := strings.TrimSpace(strings.TrimPrefix(cmdLine, parts[0]))
@@ -135,70 +107,72 @@ func handleCommand(ctx context.Context, owner session.Identity, cmdLine string, 
 		return false, nil
 
 	case "/new":
-		newSess, err := session.New(session.Config{
-			Engine: eng,
-			Owner:  owner,
-		})
+		created, err := client.CreateSession(ctx, "", "")
 		if err != nil {
 			return false, fmt.Errorf("create new session: %w", err)
 		}
-		if err := sm.Register(ctx, newSess); err != nil {
-			return false, fmt.Errorf("register session: %w", err)
-		}
-		*activeSess = newSess
-		fmt.Printf("Created and switched to session: %s\n\n", newSess.ID())
+		*activeSess = created
+		fmt.Printf("Created and switched to session: %s\n\n", created.ID)
 		return false, nil
 
 	case "/sessions", "/list":
-		listSessions(sm, owner, (*activeSess).ID())
-		return false, nil
+		return false, listSessions(ctx, client, activeSess.ID)
 
 	case "/resume":
 		if args == "" {
 			return false, errors.New("usage: /resume <session-id-or-name>")
 		}
-		target, ok := findSession(sm, owner, args)
+		target, ok, err := findSession(ctx, client, args)
+		if err != nil {
+			return false, err
+		}
 		if !ok {
 			return false, fmt.Errorf("no session found matching %q", args)
 		}
 		*activeSess = target
-		fmt.Printf("Resumed session %s (%s)\n\n", target.ID(), target.Title())
+		fmt.Printf("Resumed session %s (%s)\n\n", target.ID, target.Title)
 		return false, nil
 
 	case "/rename":
 		if args == "" {
 			return false, errors.New("usage: /rename <new-title>")
 		}
-		if err := (*activeSess).Rename(args); err != nil {
+		updated, err := client.RenameSession(ctx, activeSess.ID, args, "")
+		if err != nil {
 			return false, err
 		}
-		_ = sm.Save(ctx, *activeSess)
-		fmt.Printf("Session renamed to: %s\n\n", args)
+		*activeSess = updated
+		fmt.Printf("Session renamed to: %s\n\n", updated.Title)
 		return false, nil
 
 	case "/restart":
-		if err := (*activeSess).Restart(); err != nil {
+		restarted, err := client.RestartSession(ctx, activeSess.ID)
+		if err != nil {
 			return false, err
 		}
-		_ = sm.Save(ctx, *activeSess)
+		*activeSess = restarted
 		fmt.Println("Session restarted. Conversation history cleared.")
 		return false, nil
 
 	case "/info":
-		s := *activeSess
-		usage := s.TotalUsage()
-		o := s.Owner()
-		fmt.Printf("\n--- Active Session ---\n")
-		fmt.Printf("ID:         %s\n", s.ID())
-		if s.Name() != "" {
-			fmt.Printf("Name:       %s\n", s.Name())
+		if refreshed, err := client.GetSession(ctx, activeSess.ID); err == nil {
+			*activeSess = refreshed
 		}
-		fmt.Printf("Title:      %s\n", s.Title())
-		fmt.Printf("Owner:      %s (%s/%s)\n", o.Username, o.ClusterID, o.UserUID)
-		fmt.Printf("Status:     %s\n", s.Status())
-		fmt.Printf("Messages:   %d\n", len(s.History()))
-		fmt.Printf("Tokens:     %d (prompt: %d, completion: %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
-		fmt.Printf("Updated:    %s\n\n", s.UpdatedAt().Format("2006-01-02 15:04:05"))
+		fmt.Printf("\n--- Active Session ---\n")
+		fmt.Printf("ID:         %s\n", activeSess.ID)
+		if activeSess.Name != "" {
+			fmt.Printf("Name:       %s\n", activeSess.Name)
+		}
+		fmt.Printf("Title:      %s\n", activeSess.Title)
+		if activeSess.OwnerLabel != "" {
+			fmt.Printf("Owner:      %s\n", activeSess.OwnerLabel)
+		}
+		fmt.Printf("Status:     %s\n", activeSess.Status)
+		fmt.Printf("Turns:      %d\n", activeSess.TurnCount)
+		if activeSess.TotalTokens > 0 {
+			fmt.Printf("Tokens:     %d\n", activeSess.TotalTokens)
+		}
+		fmt.Printf("Updated:    %s\n\n", activeSess.UpdatedAt.Format("2006-01-02 15:04:05"))
 		return false, nil
 
 	default:
@@ -206,50 +180,56 @@ func handleCommand(ctx context.Context, owner session.Identity, cmdLine string, 
 	}
 }
 
-func listSessions(sm *session.SessionManager, owner session.Identity, activeID string) {
-	sessions := sm.List(owner)
+func listSessions(ctx context.Context, client AgentClient, activeID string) error {
+	sessions, err := client.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
 	if len(sessions) == 0 {
 		fmt.Println("No stored sessions found.")
-		return
+		return nil
 	}
 
 	fmt.Println("\nAvailable Sessions:")
 	for _, s := range sessions {
 		prefix := "  "
-		if s.ID() == activeID {
+		if s.ID == activeID {
 			prefix = "* "
 		}
-		fmt.Printf("%s%-36s  %-25s  %s  (%d tokens)\n",
+		fmt.Printf("%s%-36s  %-25s  %s  (%d turns)\n",
 			prefix,
-			s.ID(),
-			truncateString(s.Title(), 25),
-			s.UpdatedAt().Format("Jan 02 15:04"),
-			s.TotalUsage().TotalTokens,
+			s.ID,
+			truncateString(s.Title, 25),
+			s.UpdatedAt.Format("Jan 02 15:04"),
+			s.TurnCount,
 		)
 	}
 	fmt.Println("\nUse /resume <id-or-name> to switch sessions (* marks active).")
+	return nil
 }
 
-func findSession(sm *session.SessionManager, owner session.Identity, target string) (*session.Session, bool) {
-	// Exact ID or slug name match
-	if s, ok := sm.Resolve(owner, target); ok {
-		return s, true
+func findSession(ctx context.Context, client AgentClient, target string) (SessionInfo, bool, error) {
+	if s, err := client.GetSession(ctx, target); err == nil {
+		return s, true, nil
 	}
 
-	// Prefix match on UUID (convenient for typing first few chars)
-	for _, s := range sm.List(owner) {
-		if strings.HasPrefix(s.ID(), target) {
-			return s, true
+	sessions, err := client.ListSessions(ctx)
+	if err != nil {
+		return SessionInfo{}, false, err
+	}
+	for _, s := range sessions {
+		if strings.HasPrefix(s.ID, target) || (s.Name != "" && s.Name == target) {
+			return s, true, nil
 		}
 	}
-	return nil, false
+	return SessionInfo{}, false, nil
 }
 
-func printBanner(active *session.Session) {
+func printBanner(active SessionInfo) {
 	fmt.Println("==================================================")
 	fmt.Println("        AgentMatic Interactive DevOps Shell       ")
 	fmt.Println("==================================================")
-	fmt.Printf("Active Session: %s\n", active.ID())
+	fmt.Printf("Active Session: %s\n", active.ID)
 	fmt.Println("Type /help for commands, or ask an infrastructure question.")
 	fmt.Println("==================================================")
 }
@@ -257,38 +237,19 @@ func printBanner(active *session.Session) {
 func printHelp() {
 	fmt.Println("\nAvailable Commands:")
 	fmt.Println("  /new             Start a new conversation session")
-	fmt.Println("  /sessions        List all saved sessions from disk")
-	fmt.Println("  /resume <id>     Resume/switch to a session by ID or prefix")
+	fmt.Println("  /sessions        List all saved sessions")
+	fmt.Println("  /resume <id>     Resume/switch to a session by ID, prefix, or name")
 	fmt.Println("  /rename <title>  Rename the current session")
 	fmt.Println("  /restart         Clear history and restart the current session")
-	fmt.Println("  /info            Display current session metrics and status")
+	fmt.Println("  /info            Display current session metadata and status")
 	fmt.Println("  /help            Show this help reference")
 	fmt.Println("  /exit, /quit     Exit the interactive shell")
 }
 
-func replStepListener(step engine.Step) {
-	fmt.Printf("\n[Step %d]\n", step.Number)
-	if step.Thinking != "" {
-		fmt.Printf("Thinking:\n%s\n", strings.TrimSpace(step.Thinking))
-	}
-	if step.Message != "" {
-		fmt.Printf("Model:\n%s\n", strings.TrimSpace(step.Message))
-	}
-	if step.Action != nil {
-		fmt.Printf("Action: %s(%s)\n", step.Action.Name, step.Action.Arguments)
-	}
-	if step.Observation != "" {
-		obs := strings.TrimSpace(step.Observation)
-		if len(obs) > 500 {
-			obs = obs[:500] + "... [truncated]"
-		}
-		fmt.Printf("Observation:\n%s\n", obs)
-	}
-}
-
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }
